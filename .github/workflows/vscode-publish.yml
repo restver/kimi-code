@@ -139,11 +139,11 @@ jobs:
 
       - name: Package all platform VSIX
         if: steps.gate.outputs.should_publish == 'true'
-        run: pnpm --filter kimi-code run package:platform
+        run: pnpm --filter restver-code run package:platform
 
       - name: Verify VSIX packages
         if: steps.gate.outputs.should_publish == 'true'
-        run: pnpm --filter kimi-code run package:verify
+        run: pnpm --filter restver-code run package:verify
 
       - name: Upload VSIX artifacts
         if: steps.gate.outputs.should_publish == 'true'
@@ -162,16 +162,16 @@ jobs:
       - name: Extension host smoke test
         if: steps.gate.outputs.should_publish == 'true'
         # 1.100.0 即 package.json engines.vscode 下限，与 0.7.3 手动发版的冒烟口径一致
-        run: xvfb-run -a pnpm --filter kimi-code run test:extension-host -- --version 1.100.0
+        run: xvfb-run -a pnpm --filter restver-code run test:extension-host -- --version 1.100.0
 
       - name: Publish to VS Marketplace
         if: steps.gate.outputs.should_publish == 'true' && steps.gate.outputs.vsix_published != 'true'
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
-        run: pnpm --filter kimi-code run publish:vsix
+        run: pnpm --filter restver-code run publish:vsix
 
       - name: Publish to Open VSX
         if: steps.gate.outputs.should_publish == 'true' && steps.gate.outputs.ovsx_published != 'true'
         env:
           OVSX_PAT: ${{ secrets.OVSX_PAT }}
-        run: pnpm --filter kimi-code run publish:ovsx
+        run: pnpm --filter restver-code run publish:ovsx

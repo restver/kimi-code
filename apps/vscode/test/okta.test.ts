@@ -6,7 +6,7 @@
  * the four bridge methods end to end.
  * Wiring: the real okta module, shared bridge protocol, and handler registry;
  * VS Code, fetch, and the harness are fakes.
- * Run: pnpm --filter kimi-code exec vitest run test/okta.test.ts
+ * Run: pnpm --filter restver-code exec vitest run test/okta.test.ts
  */
 import { createServer, type Server } from "node:http";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -97,9 +97,9 @@ describe("okta config", () => {
   it("reads a pre-registered vscode:// deep-link redirectUri", () => {
     writeFileSync(
       oktaConfigPath(homeDir),
-      JSON.stringify({ issuer: "https://example.okta.com", clientId: "cid", redirectUri: "vscode://moonshot-ai.kimi-code/callback" }),
+      JSON.stringify({ issuer: "https://example.okta.com", clientId: "cid", redirectUri: "vscode://life-restver-rd.restver-code/callback" }),
     );
-    expect(loadOktaConfig(homeDir)?.redirectUri).toBe("vscode://moonshot-ai.kimi-code/callback");
+    expect(loadOktaConfig(homeDir)?.redirectUri).toBe("vscode://life-restver-rd.restver-code/callback");
   });
 
   it("honors an explicit authMode opt-out and rejects invalid values", () => {
@@ -588,7 +588,7 @@ describe("deep-link callback flow", () => {
       JSON.stringify({
         issuer: "https://example.okta.com",
         clientId: "cid",
-        redirectUri: "vscode://moonshot-ai.kimi-code/callback",
+        redirectUri: "vscode://life-restver-rd.restver-code/callback",
         scopes: "openid",
       }),
     );
@@ -625,7 +625,7 @@ describe("deep-link callback flow", () => {
     provider.onLoginUrl = (url) => {
       const authorize = new URL(url);
 
-      expect(authorize.searchParams.get("redirect_uri")).toBe("vscode://moonshot-ai.kimi-code/callback");
+      expect(authorize.searchParams.get("redirect_uri")).toBe("vscode://life-restver-rd.restver-code/callback");
       void uriHandler.handleUri({ query: "code=abc&state=" + (authorize.searchParams.get("state") ?? "") });
     };
     const session = await provider.createSession(["openid"]);

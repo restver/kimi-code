@@ -2,8 +2,9 @@
 
 > **补记（同日稍后）**：管理员注册的深链实为 `vscode://life-restver-rd.restver-code`（此前误记为 `…rd.code`），已二次改名：`name`: code → **restver-code**（publisher 不变），仓库 5 处引用、文档示例与 VSIX 已按新值重打。正文中出现的 `name: "code"` / `--filter restver-code` 等为当时对话实况，终态以文末成果清单为准。
 
+> **补记（2026-09-02，合并上游 main 时发现两处漏改）**：① `pnpm-workspace.yaml:12,15` 的两条 overrides 键还写着旧包名（`"kimi-code>@tailwindcss/vite": "4.1.18"`、`"kimi-code>tailwindcss": "4.1.18"`）——override 的键是"包名>依赖名"选择器，包改名后这两条**静默失配**（pnpm 不报错），把 vscode 插件的 tailwind 钉在 4.1.18 的意图失效，重新解析 lockfile 时会升到 4.2.2；已随合并改为 `restver-code>@tailwindcss/vite` / `restver-code>tailwindcss`。② `.github/workflows/vscode-publish.yml` 当时只改了 `vsce show`（`:116`）和 open-vsx 查询（`:104`）两处的标识符，**5 处 `--filter kimi-code run …`（`:142/:146/:165/:171/:177`）漏改**——filter 按包名找包，旧名找不到包，发布工作流一跑就断；已改为 `--filter restver-code run`。教训：按包名引用一个包的位置，除了 filter/flake/changeset，还有 **pnpm overrides 的选择器键**——它平时完全静默，只在重新解析依赖时才暴露。
 
-改动内容（8 个文件）：
+改动内容（9 个文件）：
 
 | 文件 | 改动 |
 |---|---|
@@ -11,7 +12,8 @@
 | 根 `package.json` | typecheck 脚本 `--filter restver-code` |
 | `flake.nix` | workspaceNames `"restver-code"`（仓库硬规则，`check-nix-workspace.mjs` 验证 ✓：19/19） |
 | `.changeset/okta-sso-login.md` | 包名键 `"restver-code": patch` |
-| `.github/workflows/vscode-publish.yml` | filter / `vsce show` 扩展 ID / open-vsx 查询三处 |
+| `.github/workflows/vscode-publish.yml` | filter / `vsce show` 扩展 ID / open-vsx 查询三处（**2026-09-02 补齐 5 处 `--filter` 运行行**） |
+| `pnpm-workspace.yaml` | overrides 两键 `kimi-code>…` → `restver-code>…`（**2026-09-02 补**，见顶部补记①） |
 | `pnpm-lock.yaml` | 重新生成（importer 名） |
 | okta 测试 + 两份文档（`structured-okta.md` / `structured-okta-implemented-summary.md`） | 示例深链值统一为 `vscode://life-restver-rd.restver-code`；设计文档新增 **fork 定制点清单**（标识符 5 处同步 + node-sdk `setMemoryConfig`，上游合并时逐处核对） |
 

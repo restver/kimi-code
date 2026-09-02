@@ -171,7 +171,7 @@ export class KimiWebviewProvider implements vscode.WebviewViewProvider {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Content-Security-Policy" content="${csp}">
-  <title>Kimi Code</title>
+  <title>Restver Code</title>
 </head>
 <body data-baseuri="${baseUri}" data-webviewid="${webviewId}">
   <div id="root"></div>

@@ -1,8 +1,8 @@
 {
   "name": "restver-code",
   "publisher": "life-restver-rd",
-  "displayName": "Kimi Code",
-  "description": "Official Kimi Code plugin for VS Code",
+  "displayName": "Restver Code",
+  "description": "Restver Code plugin for VS Code",
   "version": "0.7.5",
   "private": true,
   "license": "Apache-2.0",
@@ -49,7 +49,7 @@
   "icon": "resources/kimi-icon-storefront.png",
   "contributes": {
     "configuration": {
-      "title": "Kimi Code",
+      "title": "Restver Code",
       "properties": {
         "kimi.yoloMode": {
           "type": "boolean",
@@ -170,7 +170,7 @@
       "activitybar": [
         {
           "id": "kimi-sidebar",
-          "title": "Kimi Code",
+          "title": "Restver Code",
           "icon": "resources/kimi-icon.svg"
         }
       ]
@@ -180,7 +180,7 @@
         {
           "type": "webview",
           "id": "kimi.webview",
-          "name": "Kimi Code"
+          "name": "Restver Code"
         }
       ]
     },

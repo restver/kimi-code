@@ -164,7 +164,10 @@ function requireHttpsUrl(record: Record<string, unknown>, field: string, path: s
   } catch {
     throw new Error(`Invalid Okta SSO config (${path}): "${field}" must be a URL (got "${value}").`);
   }
-  if (parsed.protocol !== "https:") {
+  const localHost = parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1" || parsed.hostname === "[::1]";
+  if (parsed.protocol !== "https:" && !(parsed.protocol === "http:" && localHost)) {
+    // http is tolerated ONLY for a loopback issuer (local mock IdP, e.g.
+    // ai_api_backend/server.mjs); everything else must be https.
     throw new Error(`Invalid Okta SSO config (${path}): "${field}" must use https (got "${value}").`);
   }
   return value.endsWith("/") ? value.slice(0, -1) : value;

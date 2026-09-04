@@ -108,6 +108,11 @@ describe("okta config", () => {
     expect(() => loadOktaConfig(homeDir)).toThrow(/"issuer" must use https/);
   });
 
+  it("tolerates a loopback http issuer for the local mock IdP", () => {
+    writeFileSync(oktaConfigPath(homeDir), JSON.stringify({ issuer: "http://127.0.0.1:9000/", clientId: "cid" }));
+    expect(loadOktaConfig(homeDir)?.issuer).toBe("http://127.0.0.1:9000");
+  });
+
   it("memoizes by file stats until the file changes", () => {
     writeFileSync(
       oktaConfigPath(homeDir),

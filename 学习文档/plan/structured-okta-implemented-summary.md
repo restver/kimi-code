@@ -191,3 +191,12 @@ token（同一个 Okta token）注入到**每一个**生成的 provider 段（�
 2. 写两个配置文件：`~/.kimi-code/okta.json`（最小只需 issuer + clientId）+ `~/.kimi-code/gateway.json`（最小只需 apiBaseUrl），按上文全量示例
 3. F5 起 Extension Development Host 走一遍真实登录 → 验证 config.toml 供给段、聊天发消息带 Bearer、登出清理
 4. 变更未提交 git，可先 review
+
+
+
+**遗留风险**
+
+一个遗留风险要你知道（本轮没修，你叫停了）：真正的根因是引擎 memory 层是“整段遮蔽”而非字段合并（configService.ts:581-585）——注入 {apiKey} 后，运行时
+  providers 表只剩 okta 那一条。模型级 baseUrl 让 okta 模型自身免疫了，但如果将来有人手配其他 provider（API key 
+  直连那种），它们会被内存层遮蔽掉。修法是把注入基底改成“磁盘全量 + token”（需要给 node-sdk 加一行 readConfigFile
+  re-export，就是刚才被你拒的那个编辑）。现在你们环境全是 okta 模型，不急；要修时说一声。

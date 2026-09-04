@@ -47,7 +47,7 @@ import { clearOktaConfigCache, loadOktaConfig, oktaConfigPath } from "../src/okt
 import { startLoopbackServer } from "../src/okta/loopback";
 import { applyOktaProviderConfig, fetchOktaModels, type OktaModelEntry } from "../src/okta/models";
 import { OktaAuthenticationProvider } from "../src/okta/auth-provider";
-import { OktaTokenStore, needsRefresh, type OktaEngineInjector } from "../src/okta/token-store";
+import { OktaTokenStore, createEngineInjector, needsRefresh, type OktaEngineInjector } from "../src/okta/token-store";
 
 let homeDir: string;
 
@@ -131,6 +131,8 @@ describe("gateway config", () => {
       providerName: "okta",
       defaultContextLength: 128000,
       protocolAliases: {},
+      headers: {},
+      tokenHeaders: {},
     });
     writeFileSync(
       gatewayConfigPath(homeDir),
@@ -254,6 +256,8 @@ describe("models", () => {
     providerName: "okta",
     defaultContextLength: 128000,
     protocolAliases: {},
+    headers: {},
+    tokenHeaders: {},
   };
 
   // Raw catalog entries exactly as the gateway returns them.
@@ -373,7 +377,7 @@ describe("models", () => {
     });
     expect(sections.models["okta-anthropic/claude-x"]?.maxContextSize).toBe(128000);
     expect(sections.models["okta-anthropic/claude-x"]?.protocol).toBe("anthropic");
-    expect(sections.providerNames).toContain("okta-openai");
+    expect(Object.keys(sections.providerRows)).toContain("okta-openai");
     expect(sections.defaultModel).toBe("okta-openai/gpt-5.4");
   });
 
@@ -413,14 +417,14 @@ describe("models", () => {
     const first = applyOktaProviderConfig({} as never, { gateway, models: [openaiModel, anthropicModel] });
     const config = { providers: first.providers, models: first.models, defaultModel: first.defaultModel } as never;
     const second = applyOktaProviderConfig(config, { gateway, models: [openaiModel, anthropicModel] });
-    expect([...second.providerNames].sort()).toEqual([...first.providerNames].sort());
+    expect(Object.keys(second.providerRows).sort()).toEqual(Object.keys(first.providerRows).sort());
     expect(second.models["okta-openai/gpt-5.4"]).toBeDefined();
   });
 
   it("suffices same-host same-protocol groups differently", () => {
     const otherBase = { ...openaiModel, model: "gpt-5.4-mini", apiBase: "https://one.example.internal/v2" };
     const sections = applyOktaProviderConfig({} as never, { gateway, models: [openaiModel, otherBase] });
-    expect([...sections.providerNames].sort()).toEqual([
+    expect(Object.keys(sections.providerRows).sort()).toEqual([
       "okta-openai",
       "okta-openai-2",
     ].sort());
@@ -458,24 +462,51 @@ describe("token store", () => {
   const session = {
     token: { accessToken: "at", refreshToken: "rt", expiresAt: Math.floor(Date.now() / 1000) + 3000, scope: "openid", tokenType: "Bearer", expiresIn: 3600 },
     accountLabel: "user@example.com",
-    providerNames: ["okta-openai", "okta-anthropic"],
+    providerRows: {
+      "okta-openai": { type: "openai", baseUrl: "https://one.example.internal/v1" },
+      "okta-anthropic": { type: "anthropic", baseUrl: "https://two.example.internal/v1" },
+    },
+    tokenHeaders: {},
   };
 
   it("persists to SecretStorage and pushes the access token to the engine", async () => {
     const { store, secrets, injector } = makeStore();
     await store.save(session);
     expect(JSON.parse(secrets.get("kimi-code.okta") ?? "{}")).toEqual(session);
-    expect(injector.inject).toHaveBeenCalledWith("at", session.providerNames);
+    expect(injector.inject).toHaveBeenCalledWith("at", session.providerRows, {});
     expect(await store.load()).toEqual(session);
   });
 
-  it("updates provider names post-provision and re-injects", async () => {
+  it("updates provider rows post-provision and re-injects with header templates", async () => {
     const { store, injector } = makeStore();
-    await store.save({ ...session, providerNames: [] });
-    expect(injector.inject).toHaveBeenLastCalledWith("at", []);
-    await store.updateProviderNames(["okta-openai"]);
-    expect(injector.inject).toHaveBeenLastCalledWith("at", ["okta-openai"]);
-    expect((await store.load())?.providerNames).toEqual(["okta-openai"]);
+    await store.save({ ...session, providerRows: {} });
+    expect(injector.inject).toHaveBeenLastCalledWith("at", {}, {});
+    const rows = { "okta-openai": { type: "openai", baseUrl: "https://one.example.internal/v1" } };
+    const templates = { apiKey: "{token}" };
+    await store.updateProviders(rows, templates);
+    expect(injector.inject).toHaveBeenLastCalledWith("at", rows, templates);
+    expect((await store.load())?.providerRows).toEqual(rows);
+    expect((await store.load())?.tokenHeaders).toEqual(templates);
+  });
+
+  it("injector renders token templates into COMPLETE rows", () => {
+    const setMemoryConfig = vi.fn(async () => undefined);
+    const injector = createEngineInjector({ setMemoryConfig } as never);
+    void injector.inject(
+      "tok123",
+      { "okta-openai": { type: "openai", baseUrl: "https://one.example.internal/v1", customHeaders: { version: "1.1.1", name: "agent" } } },
+      { apiKey: "{token}", "X-Agent": "agent-{token}" },
+    );
+    expect(setMemoryConfig).toHaveBeenCalledWith({
+      providers: {
+        "okta-openai": {
+          type: "openai",
+          baseUrl: "https://one.example.internal/v1",
+          customHeaders: { version: "1.1.1", name: "agent", apiKey: "tok123", "X-Agent": "agent-tok123" },
+          apiKey: "tok123",
+        },
+      },
+    });
   });
 
   it("clears both tiers on logout", async () => {
@@ -500,7 +531,8 @@ describe("activation restore", () => {
     const freshSession = {
       token: { accessToken: "at", refreshToken: "rt", expiresAt: Math.floor(Date.now() / 1000) + 3000, scope: "openid", tokenType: "Bearer", expiresIn: 3600 },
       accountLabel: "user@example.com",
-      providerNames: ["okta-openai"],
+      providerRows: { "okta-openai": { type: "openai", baseUrl: "https://one.example.internal/v1" } },
+      tokenHeaders: {},
     };
     const secrets = new Map<string, string>([["kimi-code.okta", JSON.stringify(freshSession)]]);
     const injector: OktaEngineInjector = {
@@ -524,7 +556,11 @@ describe("activation restore", () => {
     });
     // No okta.json in homeDir: the restore must still inject the token.
     await provider.restoreOnActivation();
-    expect(injector.inject).toHaveBeenCalledWith("at", ["okta-openai"]);
+    expect(injector.inject).toHaveBeenCalledWith(
+      "at",
+      { "okta-openai": { type: "openai", baseUrl: "https://one.example.internal/v1" } },
+      {},
+    );
   });
 });
 

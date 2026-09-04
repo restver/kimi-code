@@ -29,7 +29,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     (message) => log(message),
   );
   context.subscriptions.push(provider, outputChannel);
-  initOktaModule({ context, harness: provider.harness, log, logError });
+  initOktaModule({ context, harness: provider.harness, log, logError, broadcast: provider.broadcast });
 
   let isLoggedIn = false;
   try {

@@ -88,6 +88,7 @@ export class OktaTokenStore {
   private readonly secrets: vscode.SecretStorage;
   private readonly logError: (message: string, error: unknown) => void;
   private readonly listeners = new Set<() => void>();
+  private readonly clearListeners = new Set<() => void>();
   private engineInjector: OktaEngineInjector | undefined;
   private refreshTimer: ReturnType<typeof setInterval> | undefined;
   private refreshInFlight: boolean = false;
@@ -140,12 +141,27 @@ export class OktaTokenStore {
       }
     }
     this.notify();
+    for (const listener of this.clearListeners) {
+      try {
+        listener();
+      } catch {
+        // Observers must not affect the store.
+      }
+    }
   }
 
   onChange(listener: () => void): () => void {
     this.listeners.add(listener);
     return () => {
       this.listeners.delete(listener);
+    };
+  }
+
+  /** Fires on logout (clear) only — not on token rotation. */
+  onClear(listener: () => void): () => void {
+    this.clearListeners.add(listener);
+    return () => {
+      this.clearListeners.delete(listener);
     };
   }
 

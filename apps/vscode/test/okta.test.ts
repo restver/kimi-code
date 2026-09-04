@@ -35,6 +35,7 @@ vi.mock("vscode", () => ({
     dispose = vi.fn();
   },
   window: { registerUriHandler: vi.fn(() => ({ dispose: () => {} })) },
+  commands: { executeCommand: vi.fn(async () => undefined) },
 }));
 
 import { createHash } from "node:crypto";
@@ -615,6 +616,69 @@ describe("deep-link callback flow", () => {
     expect(session.accessToken).toBe("at");
     expect((await store.load())?.token.refreshToken).toBe("rt");
     provider.handleUri({ query: "code=late&state=whatever" } as never);
+  });
+});
+
+describe("login state and logout cleanup", () => {
+  it("CheckLoginStatus reports the OKTA session in okta mode (default, no file)", async () => {
+    const check = handlers[Methods.CheckLoginStatus] as (
+      params: undefined,
+      ctx: { harness: { homeDir: string } },
+    ) => Promise<{ loggedIn: boolean }>;
+    expect(await check(undefined, { harness: { homeDir } })).toEqual({ loggedIn: false });
+  });
+
+  it("CheckLoginStatus falls back to the kimi harness when authMode is kimi", async () => {
+    writeFileSync(oktaConfigPath(homeDir), JSON.stringify({ issuer: "https://example.okta.com", clientId: "cid", authMode: "kimi" }));
+    const check = handlers[Methods.CheckLoginStatus] as unknown as (
+      params: undefined,
+      ctx: { harness: { homeDir: string; auth: { status: () => Promise<{ providers: { hasToken: boolean }[] }> } } },
+    ) => Promise<{ loggedIn: boolean }>;
+    const result = await check(undefined, {
+      harness: { homeDir, auth: { status: async () => ({ providers: [{ hasToken: true }] }) } },
+    });
+    expect(result).toEqual({ loggedIn: true });
+  });
+
+  it("removeSession clears the session AND removes every provisioned provider", async () => {
+    const secrets = new Map<string, string>();
+    const injector: OktaEngineInjector = { inject: vi.fn(async () => undefined), clear: vi.fn(async () => undefined) };
+    const store = new OktaTokenStore({
+      secrets: {
+        get: async (key: string) => secrets.get(key),
+        store: async (key: string, value: string) => void secrets.set(key, value),
+        delete: async (key: string) => void secrets.delete(key),
+      } as never,
+      logError: () => {},
+    });
+    store.setEngineInjector(injector);
+    let cleared = 0;
+    store.onClear(() => {
+      cleared += 1;
+    });
+    const removeProvider = vi.fn(async (_name: string) => undefined);
+    const getConfig = vi.fn(async () => ({}));
+    const provider = new OktaAuthenticationProvider({
+      harness: { homeDir, removeProvider, getConfig } as never,
+      tokenStore: store,
+      log: () => {},
+      logError: () => {},
+    });
+    await store.save({
+      token: { accessToken: "at", refreshToken: "rt", expiresAt: Math.floor(Date.now() / 1000) + 3000, scope: "openid", tokenType: "Bearer", expiresIn: 3600 },
+      accountLabel: "user@example.com",
+      providerRows: {
+        "okta-openai": { type: "openai", baseUrl: "https://one.example.internal/v1" },
+        "okta-anthropic": { type: "anthropic", baseUrl: "https://two.example.internal/v1" },
+      },
+      tokenHeaders: {},
+    });
+    await provider.removeSession();
+    expect(removeProvider.mock.calls.map((call) => call[0]).sort()).toEqual(["okta-anthropic", "okta-openai"]);
+    expect(getConfig).toHaveBeenCalled();
+    expect(injector.clear).toHaveBeenCalled();
+    expect(secrets.has("kimi-code.okta")).toBe(false);
+    expect(cleared).toBe(1);
   });
 });
 

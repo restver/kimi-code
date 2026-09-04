@@ -5,11 +5,19 @@ import { OAuthAccessDeniedError } from "@moonshot-ai/kimi-code-oauth";
 import { Events, Methods } from "../../shared/bridge";
 import type { LoginResult } from "../../shared/legacy-sdk";
 import type { LoginStatus } from "../../shared/types";
+import { getOktaRuntime, readOktaMode } from "../okta/runtime";
 import { updateLoginContext } from "../utils/context";
 import type { Handler } from "./types";
 
 export const authHandlers: Record<string, Handler<any, any>> = {
   [Methods.CheckLoginStatus]: async (_, ctx): Promise<LoginStatus> => {
+    // Okta is the default login mode: report the OKTA session so the webview
+    // (ActionMenu sign-in/out state, init gating) reflects reality.
+    if (readOktaMode(ctx.harness).mode === "okta") {
+      const okta = getOktaRuntime();
+      const stored = okta === undefined ? undefined : await okta.tokenStore.load();
+      return { loggedIn: (stored?.token.accessToken.length ?? 0) > 0 };
+    }
     return { loggedIn: await updateLoginContext(ctx.harness) };
   },
 

@@ -65,3 +65,13 @@ PORT=9001 node server.mjs
 node server.mjs &        # 终端 1
 node test-flow.mjs       # 终端 2：登录→models→推理→刷新→过期→401 全链路
 ```
+
+
+**token 过期测试的三个旋钮**
+```shell
+  cd ai_api_backend &&  node server.mjs                        # TTL=120s：2分钟后发消息→401（后端日志 ⛔ expired）→5分钟 tick 自愈
+  TOKEN_TTL=1200 node server.mjs         # TTL=20min：过半衰期后 tick 静默轮换（✅ issued (refresh)），无 401
+  curl -X POST :9000/admin/revoke        # 杀掉全部 refresh token → 下次刷新 invalid_grant → 插件清会话回登录页
+  curl -X POST :9000/admin/expire        # 立刻作废全部 access token（不用等 TTL）
+  curl :9000/admin/state                 # 实时看每个 token 剩余秒数 + 计数器
+```

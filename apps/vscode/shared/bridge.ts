@@ -102,6 +102,7 @@ export const Events = {
   RollbackInput: "rollbackInput",
   LoginUrl: "loginUrl",
   OktaLoginUrl: "oktaLoginUrl",
+  OktaSessionChanged: "oktaSessionChanged",
 } as const;
 
 const rpcMethods = new Set<string>(Object.values(Methods));

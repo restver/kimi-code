@@ -177,10 +177,39 @@ token（同一个 Okta token）注入到**每一个**生成的 provider 段（�
 
 **配套**（并行完成）：node-sdk 增加 `setMemoryConfig`/`clearMemoryConfig`（base NOT_IMPLEMENTED + v2 实现 + 42 测试）；`.changeset/okta-sso-login.md`（`"kimi-code": patch`，按既有先例）。
 
-## 验证结果
+### 登录状态与退出链路修复（实测反馈的两个问题，typecheck ✓ 402/402 ✓ lint 0 error）
 
-- typecheck 两个 tsconfig（extension host + webview）通过
-- apps/vscode 全量测试 **365/365** 通过（含 33 个新 okta 测试）
+**问题 1：设置弹窗的 Sign in 状态错 + 点击走 Kimi 登录。** 
+
+**根因**：弹窗状态读 `checkLoginStatus`（查 **Kimi** token，Okta 登录后永远 false），动作调 `bridge.login()/logout()`（Kimi 通道）。
+
+**修复**：
+
+- `auth.handler.ts` 的 `CheckLoginStatus` 在 okta 模式（默认）下改报 **Okta 会话状态**（登录后弹窗自动变 Sign out，`useAppInit` 的 `setIsLoggedIn` 同源受益）
+
+- `ActionMenu.tsx` 动作按模式路由（okta → `bridge.oktaLogin()/oktaLogout()`）。
+
+**问题 2：VS Code 左下角头像退出后回不到登录页。** 
+
+**根因**：头像退出走 `provider.removeSession()` 只清会话，**没删 config.toml 里供给的模型**（模型还在 → init 判 `ready` → 留在主界面），webview 也无人通知。
+
+**修复**（`removeSession` 成为全量清理的统一退出路径）：
+
+1. 清会话（SecretStorage + 引擎内存层）
+2. 逐个删除供给的 provider 段（`harness.removeProvider`，模型别名级联清理）+ 重读配置
+3. 新增 `OktaSessionChanged` 广播：`tokenStore.onClear` → 宿主 `provider.broadcast` → 所有 webview → `App.tsx` 订阅后 `refresh()` → 零模型 + 未登录 → **回到 Okta 登录页**
+4. `oktaLogout` RPC 简化为直接调 `removeSession()`——弹窗与头像两条退出路径走同一份逻辑
+
+广播只在**退出**时发（`onClear`），token 静默轮换不触发界面刷新闪烁。新增 3 个测试（okta 模式状态检查、kimi 模式回退、removeSession 全清理断言）。
+
+验证步骤：装新 VSIX → 登录 → 弹窗应显示 Sign out → 分别从弹窗和头像退出 → 都应回到 Okta 登录页，config.toml 的 okta 段被清空。
+
+### 同期落地（前文已详述，此处记入清单）：网关推理 header（`headers` 静态 + `tokenHeaders` 值模板 `{token}`）、完整行注入（修复内存层"整段遮蔽"导致的 `api.openai.com/v1` 漂移）、本地 Okta mock 后端 `ai_api_backend/`（server.mjs 三合一 + test-flow.mjs 冒烟 7/7 + okta.json 放行 localhost http issuer）。
+
+## 验证结果（终态）
+
+- typecheck 两个 tsconfig（extension host + webview）通过（migration-legacy 在 study 分支有既有报错，与 okta 无关）
+- apps/vscode 全量测试 **402/402** 通过（含 okta 全部测试；mock 后端冒烟另测 7/7 + bad-PKCE 2/2）
 - node-sdk `sdk-rpc-client-v2.test.ts` **42/42** 通过
 - oxlint 新文件 0 error（余下 warning 与上游既有模式一致）
 - token 落盘路径 grep 清零
@@ -189,14 +218,11 @@ token（同一个 Okta token）注入到**每一个**生成的 provider 段（�
 
 1. Okta 管理台建应用（已有的 OAuth2/OIDC 应用直接复用）：Sign-in method 选 **OIDC - OpenID Connect**（即 OAuth2 应用，同一东西），Application type 选 **Native 或 SPA**（公共客户端 + PKCE）；Grant types 勾 **Authorization Code**（带 PKCE）+ **Refresh Token**；Sign-in redirect URIs 按回调方式二选一：**深链模式**（管理员已注册 `vscode://…`）→ okta.json 配同样的 `redirectUri`；**回环模式**（默认）→ 注册 `http://localhost:35173/callback`、`http://localhost:35174/callback`、`http://localhost:35175/callback`
 2. 写两个配置文件：`~/.kimi-code/okta.json`（最小只需 issuer + clientId）+ `~/.kimi-code/gateway.json`（最小只需 apiBaseUrl），按上文全量示例
-3. F5 起 Extension Development Host 走一遍真实登录 → 验证 config.toml 供给段、聊天发消息带 Bearer、登出清理
-4. 变更未提交 git，可先 review
+3. F5 起 Extension Development Host 走一遍真实登录 → 验证 config.toml 供给段、聊天发消息带 Bearer、登出清理（也可先用 `ai_api_backend/` 本地 mock 走全链）
+4. ~~变更未提交 git~~ → 已提交并推送 `origin/study`（截至 `ef02e752` + 登录状态/退出修复一笔待提交）
 
 
 
-**遗留风险**
+**遗留风险（已解决）**
 
-一个遗留风险要你知道（本轮没修，你叫停了）：真正的根因是引擎 memory 层是“整段遮蔽”而非字段合并（configService.ts:581-585）——注入 {apiKey} 后，运行时
-  providers 表只剩 okta 那一条。模型级 baseUrl 让 okta 模型自身免疫了，但如果将来有人手配其他 provider（API key 
-  直连那种），它们会被内存层遮蔽掉。修法是把注入基底改成“磁盘全量 + token”（需要给 node-sdk 加一行 readConfigFile
-  re-export，就是刚才被你拒的那个编辑）。现在你们环境全是 okta 模型，不急；要修时说一声。
+此前记录的风险——引擎 memory 层"整段遮蔽"（`configService.ts:581-585`）导致注入 `{apiKey}` 会把 provider 行的 `baseUrl`/`type` 连同其他 provider 一起遮蔽（表现为请求漂到 `api.openai.com/v1`）——**已通过"完整行注入"修复**：注入器现写入 `{type, baseUrl, customHeaders(静态+token模板渲染), apiKey}` 全量行，行数据快照在 SecretStorage 会话（`providerRows`），重启恢复零配置。注意：内存层仍是整段替换语义——非 okta 的手配 provider 在有 okta 会话期间仍会被遮蔽（当前部署全是 okta 模型，无影响；若将来混配需把注入基底换成"磁盘全量 + token"）。

@@ -3,7 +3,7 @@ import * as vscode from "vscode";
 import { Events, Methods } from "../../shared/bridge";
 import type { LoginResult } from "../../shared/legacy-sdk";
 import { OKTA_PROVIDER_ID, oktaScopes } from "../okta/auth-provider";
-import { provisionOktaModels, removeOktaProviders } from "../okta/models";
+import { provisionOktaModels } from "../okta/models";
 import { ensureOktaRuntime, readOktaMode, requireGatewayConfig, requireOktaConfig, type OktaRuntime } from "../okta/runtime";
 import type { Handler } from "./types";
 
@@ -104,11 +104,11 @@ export const oktaHandlers: Record<string, Handler<any, any>> = {
       ctx.logError("Okta module unavailable", error);
       return { success: false, error: errorMessage(error) };
     }
-    const providerNames = Object.keys((await okta.tokenStore.load())?.providerRows ?? {});
     try {
-      await okta.tokenStore.clear();
+      // removeSession is the shared logout path (also driven by the VS Code
+      // Accounts avatar): clears the session, drops the provisioned models
+      // and provider sections, and refreshes the engine config.
       await okta.provider.removeSession();
-      await removeOktaProviders(okta.harness, providerNames);
       return { success: true };
     } catch (error) {
       ctx.logError("Okta logout failed", error);

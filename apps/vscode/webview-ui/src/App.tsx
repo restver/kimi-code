@@ -107,6 +107,14 @@ export default function App() {
     refresh();
   }, [refresh]);
 
+  useEffect(() => {
+    // Okta logout may happen outside the webview (VS Code Accounts avatar):
+    // re-run init so the app falls back to the login screen.
+    return bridge.on(Events.OktaSessionChanged, () => {
+      refresh();
+    });
+  }, [refresh]);
+
   const resolution = resolveAppView({ status, modelsCount, skippedLogin, showLogin });
 
   // 登录界面：未登录且未跳过，或用户从其他界面主动选择登录

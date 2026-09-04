@@ -91,8 +91,29 @@ export class OktaAuthenticationProvider implements vscode.AuthenticationProvider
     return this.inFlightCreate;
   }
 
+  /**
+   * Full logout — reachable from BOTH the webview (oktaLogout RPC) and the
+   * VS Code Accounts avatar (VS Code calls this directly). Clears the
+   * session AND removes the provisioned models/provider sections, so the
+   * webview re-inits into the login screen instead of a broken "ready".
+   */
   async removeSession(): Promise<void> {
+    const stored = await this.tokenStore.load();
     await this.tokenStore.clear();
+    if (stored !== undefined) {
+      for (const name of Object.keys(stored.providerRows)) {
+        try {
+          await this.harness.removeProvider(name);
+        } catch (error) {
+          this.logError(`Unable to remove the provisioned provider "${name}" on logout`, error);
+        }
+      }
+      try {
+        await this.harness.getConfig({ reload: true });
+      } catch {
+        // Best-effort refresh; the next getConfig reloads anyway.
+      }
+    }
     this._onDidChangeSessions.fire({ added: [], removed: [], changed: [] });
   }
 

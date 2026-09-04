@@ -15,6 +15,8 @@ import * as vscode from "vscode";
 
 import type { KimiHarness } from "@moonshot-ai/kimi-code-sdk";
 
+import { Events } from "../../shared/bridge";
+
 import { OktaAuthenticationProvider, OKTA_PROVIDER_ID, OKTA_PROVIDER_LABEL } from "./auth-provider";
 import { loadGatewayConfig, type GatewayConfig } from "./gateway-config";
 import { loadOktaConfig, type OktaSsoConfig } from "./okta-config";
@@ -31,6 +33,7 @@ interface OktaModuleContext {
   readonly secrets: vscode.SecretStorage;
   readonly log: (message: string) => void;
   readonly logError: (message: string, error: unknown) => void;
+  readonly broadcast: ((event: string, data: unknown) => void) | undefined;
 }
 
 let moduleContext: OktaModuleContext | undefined;
@@ -46,12 +49,15 @@ export function initOktaModule(options: {
   readonly harness: KimiHarness;
   readonly log: (message: string) => void;
   readonly logError: (message: string, error: unknown) => void;
+  /** Fan-out to every webview; wired from the webview provider. */
+  readonly broadcast?: (event: string, data: unknown) => void;
 }): void {
   try {
     moduleContext = {
       secrets: options.context.secrets,
       log: options.log,
       logError: options.logError,
+      broadcast: options.broadcast,
     };
     ensureOktaRuntime(options.harness);
   } catch (error) {
@@ -121,6 +127,11 @@ export function ensureOktaRuntime(harness: KimiHarness): OktaRuntime {
   // Receives vscode:// deep-link callbacks when okta.json sets redirectUri.
   const uriHandler = vscode.window.registerUriHandler({ handleUri: (uri) => provider.handleUri(uri) });
   runtime = { tokenStore, provider, harness, disposables: [registration, uriHandler, provider] };
+  // Logouts driven OUTSIDE the webview (VS Code Accounts avatar) still need
+  // the webview to re-init into the login screen.
+  tokenStore.onClear(() => {
+    host.broadcast?.(Events.OktaSessionChanged, undefined);
+  });
   void provider.restoreOnActivation();
   return runtime;
 }

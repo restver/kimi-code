@@ -197,7 +197,8 @@ export class OktaAuthenticationProvider implements vscode.AuthenticationProvider
       token: response.token,
       // Refresh responses carry no id_token; keep the label from login.
       accountLabel: stored.accountLabel,
-      providerNames: stored.providerNames,
+      providerRows: stored.providerRows,
+      tokenHeaders: stored.tokenHeaders,
     };
     await this.tokenStore.save(refreshed);
     this._onDidChangeSessions.fire({ added: [], removed: [], changed: [] });
@@ -300,8 +301,9 @@ export class OktaAuthenticationProvider implements vscode.AuthenticationProvider
         token: response.token,
         accountLabel: response.accountLabel,
         // Filled by the handler right after provisioning computes the
-        // provider groups; empty here on purpose.
-        providerNames: [],
+        // provider rows; empty here on purpose.
+        providerRows: {},
+        tokenHeaders: {},
       };
       await this.tokenStore.save(session);
       this._onDidChangeSessions.fire({ added: [], removed: [], changed: [] });

@@ -41,8 +41,8 @@ export interface OktaModelEntry {
 export interface OktaProvisionResult {
   readonly modelsCount: number;
   readonly defaultModel: string;
-  /** Generated provider section names — the engine injection key list. */
-  readonly providerNames: readonly string[];
+  /** Generated provider rows (minus apiKey) — the engine injection payload. */
+  readonly providerRows: Readonly<Record<string, { type: string; baseUrl: string; customHeaders?: Record<string, string> }>>;
 }
 
 export async function fetchOktaModels(gateway: GatewayConfig, accessToken: string): Promise<OktaModelEntry[]> {
@@ -166,7 +166,7 @@ export function applyOktaProviderConfig(
   providers: NonNullable<KimiConfig["providers"]>;
   models: NonNullable<KimiConfig["models"]>;
   defaultModel: string;
-  providerNames: readonly string[];
+  providerRows: Readonly<Record<string, { type: string; baseUrl: string; customHeaders?: Record<string, string> }>>;
 } {
   const { gateway } = input;
   if (input.models.length === 0) {
@@ -187,6 +187,8 @@ export function applyOktaProviderConfig(
   const taken = new Set<string>();
   const providers: NonNullable<KimiConfig["providers"]> = { ...config.providers };
   const nameByGroup = new Map<string, string>();
+  const rows: Record<string, { type: string; baseUrl: string; customHeaders?: Record<string, string> }> = {};
+  const staticHeaders = Object.keys(gateway.headers).length > 0 ? { customHeaders: { ...gateway.headers } } : {};
   for (const key of [...groups.keys()].sort()) {
     const group = groups.get(key);
     if (group === undefined) continue;
@@ -204,7 +206,9 @@ export function applyOktaProviderConfig(
       type: group.protocol as ProviderType,
       baseUrl: group.apiBase,
       apiKey: "",
+      ...staticHeaders,
     };
+    rows[name] = { type: group.protocol, baseUrl: group.apiBase, ...staticHeaders };
   }
 
   const existingModels: NonNullable<KimiConfig["models"]> = { ...config.models };
@@ -260,7 +264,7 @@ export function applyOktaProviderConfig(
   const firstAlias = aliasKeys.values().next().value as string;
   const defaultModel = currentDefault !== undefined && !currentIsOurs ? currentDefault : firstAlias;
 
-  return { providers, models: existingModels, defaultModel, providerNames: [...taken] };
+  return { providers, models: existingModels, defaultModel, providerRows: rows };
 }
 
 export async function provisionOktaModels(input: {
@@ -285,7 +289,7 @@ export async function provisionOktaModels(input: {
     models: sections.models,
     defaultModel: sections.defaultModel,
   });
-  return { modelsCount: models.length, defaultModel: sections.defaultModel, providerNames: sections.providerNames };
+  return { modelsCount: models.length, defaultModel: sections.defaultModel, providerRows: sections.providerRows };
 }
 
 /** Removes every generated provider section (logout). */

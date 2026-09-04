@@ -13,7 +13,9 @@
  *   "modelsPath": "/models",
  *   "providerName": "okta",
  *   "defaultContextLength": 128000,
- *   "protocolAliases": { "openai": "openai_responses", "openrouter": "openai_responses" }
+ *   "protocolAliases": { "openai": "openai_responses", "openrouter": "openai_responses" },
+ *   "headers": { "version": "1.1.1", "name": "agent" },
+ *   "tokenHeaders": { "apiKey": "{token}", "X-Agent": "agent-{token}" }
  * }
  */
 import { readFileSync, statSync } from "node:fs";
@@ -27,6 +29,16 @@ export interface GatewayConfig {
   readonly providerName: string;
   /** Fallback window size when a catalog entry has no contextLength. */
   readonly defaultContextLength: number;
+  /** Static headers sent with every inference request, as-is. */
+  readonly headers: Readonly<Record<string, string>>;
+  /**
+   * Token-derived headers: header name → VALUE TEMPLATE. `{token}` in the
+   * template is replaced with the current Okta access token at injection
+   * time ("{token}", "Bearer {token}", "agent-{token}" …). The rendered
+   * value lives only in the engine's memory layer, never on disk, and
+   * re-renders automatically on every token refresh.
+   */
+  readonly tokenHeaders: Readonly<Record<string, string>>;
   /**
    * Catalog label → actual inference protocol, for gateways whose "provider"
    * labels name the vendor rather than the wire protocol (e.g. everything is
@@ -43,6 +55,7 @@ const DEFAULT_MODELS_PATH = "/models";
 export const DEFAULT_GATEWAY_PROVIDER_NAME = "okta";
 const DEFAULT_CONTEXT_LENGTH = 128000;
 const EMPTY_PROTOCOL_ALIASES: Readonly<Record<string, string>> = {};
+const EMPTY_HEADERS: Readonly<Record<string, string>> = {};
 
 interface GatewayCacheEntry {
   readonly mtimeMs: number;
@@ -110,6 +123,8 @@ function parseGatewayConfig(path: string): GatewayConfig {
       typeof raw["defaultContextLength"] === "number" && Number.isInteger(raw["defaultContextLength"]) && raw["defaultContextLength"] > 0
         ? raw["defaultContextLength"]
         : DEFAULT_CONTEXT_LENGTH,
+    headers: parseHeaders(raw, "headers", path),
+    tokenHeaders: parseHeaders(raw, "tokenHeaders", path),
   };
 }
 
@@ -127,6 +142,27 @@ function parseProtocolAliases(raw: Record<string, unknown>, path: string): Reado
     aliases[label] = protocol.trim();
   }
   return aliases;
+}
+
+function parseHeaders(raw: Record<string, unknown>, field: string, path: string): Readonly<Record<string, string>> {
+  const value = raw[field];
+  if (value === undefined) return EMPTY_HEADERS;
+  if (!isRecord(value)) {
+    throw new Error(`Invalid gateway config (${path}): "${field}" must be an object of header name → value.`);
+  }
+  const out: Record<string, string> = {};
+  for (const [name, headerValue] of Object.entries(value)) {
+    if (typeof headerValue !== "string" || headerValue.trim().length === 0) {
+      throw new Error(`Invalid gateway config (${path}): "${field}.${name}" must be a non-empty string.`);
+    }
+    if (field === "tokenHeaders" && !headerValue.includes("{token}")) {
+      throw new Error(
+        `Invalid gateway config (${path}): "tokenHeaders.${name}" must contain the {token} placeholder (got "${headerValue}"). Use "headers" for static values.`,
+      );
+    }
+    out[name] = headerValue.trim();
+  }
+  return out;
 }
 
 function requireNonEmptyString(record: Record<string, unknown>, field: string, path: string): string {

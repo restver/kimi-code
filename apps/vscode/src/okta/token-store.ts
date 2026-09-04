@@ -20,15 +20,25 @@ import type * as vscode from "vscode";
 /** Fixed secret key — no config derivation, so restore never reads okta.json. */
 export const OKTA_SECRET_KEY = "kimi-code.okta";
 
+export interface ProviderRow {
+  readonly type: string;
+  readonly baseUrl: string;
+  readonly customHeaders?: Readonly<Record<string, string>>;
+}
+
 export interface StoredOktaSession {
   readonly token: TokenInfo;
   readonly accountLabel: string;
   /**
-   * Generated config.toml provider section names (the catalog groups them by
-   * protocol+apiBase); filled right after provisioning so the config-free
-   * restore after a reload injects the token into every one of them.
+   * COMPLETE generated provider rows (minus the apiKey): the engine's memory
+   * layer REPLACES a whole config domain rather than merging fields, so the
+   * injected row must carry type/baseUrl/customHeaders itself — a bare
+   * {apiKey} row would shadow the provider's own fields and redirect
+   * requests to the vendor default endpoint.
    */
-  readonly providerNames: readonly string[];
+  readonly providerRows: Readonly<Record<string, ProviderRow>>;
+  /** Token-derived header templates ({token} placeholder), from gateway.json. */
+  readonly tokenHeaders: Readonly<Record<string, string>>;
 }
 
 /**
@@ -39,16 +49,32 @@ export interface StoredOktaSession {
  * snapshotted in the stored session, not in okta.json.
  */
 export interface OktaEngineInjector {
-  inject(accessToken: string, providerNames: readonly string[]): Promise<void>;
+  inject(
+    accessToken: string,
+    providerRows: Readonly<Record<string, ProviderRow>>,
+    tokenHeaders: Readonly<Record<string, string>>,
+  ): Promise<void>;
   clear(): Promise<void>;
 }
 
 export function createEngineInjector(harness: KimiHarness): OktaEngineInjector {
   return {
-    inject: (accessToken, providerNames) => {
-      const providers: Record<string, { apiKey: string }> = {};
-      for (const name of providerNames) {
-        providers[name] = { apiKey: accessToken };
+    inject: (accessToken, providerRows, tokenHeaders) => {
+      const providers: Record<string, Record<string, unknown>> = {};
+      const renderedTokenHeaders: Record<string, string> = {};
+      for (const [name, template] of Object.entries(tokenHeaders)) {
+        renderedTokenHeaders[name] = template.replaceAll("{token}", accessToken);
+      }
+      for (const [name, row] of Object.entries(providerRows)) {
+        providers[name] = {
+          type: row.type,
+          baseUrl: row.baseUrl,
+          apiKey: accessToken,
+          customHeaders: {
+            ...row.customHeaders,
+            ...renderedTokenHeaders,
+          },
+        };
       }
       return harness.setMemoryConfig({ providers });
     },
@@ -88,11 +114,14 @@ export class OktaTokenStore {
     return this.loadSecret();
   }
 
-  /** Record the provisioned provider names (post-login) and re-inject. */
-  async updateProviderNames(providerNames: readonly string[]): Promise<void> {
+  /** Record the provisioned provider rows + header templates (post-login) and re-inject. */
+  async updateProviders(
+    providerRows: Readonly<Record<string, ProviderRow>>,
+    tokenHeaders: Readonly<Record<string, string>>,
+  ): Promise<void> {
     const session = await this.loadSecret();
     if (session === undefined) return;
-    await this.save({ ...session, providerNames });
+    await this.save({ ...session, providerRows, tokenHeaders });
   }
 
   async save(session: StoredOktaSession): Promise<void> {
@@ -144,7 +173,7 @@ export class OktaTokenStore {
   private async injectToEngine(session: StoredOktaSession): Promise<void> {
     if (this.engineInjector === undefined || session.token.accessToken.length === 0) return;
     try {
-      await this.engineInjector.inject(session.token.accessToken, session.providerNames);
+      await this.engineInjector.inject(session.token.accessToken, session.providerRows, session.tokenHeaders);
     } catch (error) {
       // Injection failures degrade engine requests, not login itself; the
       // next save/refresh retries the push.
@@ -173,7 +202,12 @@ export class OktaTokenStore {
     try {
       const parsed: unknown = JSON.parse(raw);
       if (!isStoredSession(parsed)) return undefined;
-      return { token: parsed.token, accountLabel: parsed.accountLabel, providerNames: parsed.providerNames };
+      return {
+        token: parsed.token,
+        accountLabel: parsed.accountLabel,
+        providerRows: parsed.providerRows,
+        tokenHeaders: parsed.tokenHeaders,
+      };
     } catch {
       return undefined;
     }
@@ -198,13 +232,16 @@ export function needsRefresh(token: TokenInfo, nowSec: number = Math.floor(Date.
 function isStoredSession(value: unknown): value is StoredOktaSession {
   if (typeof value !== "object" || value === null) return false;
   const token = (value as { token?: unknown }).token;
-  const providerNames = (value as { providerNames?: unknown }).providerNames;
+  const providerRows = (value as { providerRows?: unknown }).providerRows;
+  const tokenHeaders = (value as { tokenHeaders?: unknown }).tokenHeaders;
   return (
     typeof token === "object" &&
     token !== null &&
     typeof (token as { accessToken?: unknown }).accessToken === "string" &&
     typeof (value as { accountLabel?: unknown }).accountLabel === "string" &&
-    Array.isArray(providerNames) &&
-    providerNames.every((name) => typeof name === "string")
+    typeof providerRows === "object" &&
+    providerRows !== null &&
+    typeof tokenHeaders === "object" &&
+    tokenHeaders !== null
   );
 }

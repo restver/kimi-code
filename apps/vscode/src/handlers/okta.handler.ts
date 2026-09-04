@@ -60,9 +60,10 @@ export const oktaHandlers: Record<string, Handler<any, any>> = {
         gateway,
         accessToken: session.accessToken,
       });
-      // Persist the generated provider group names so the config-free
-      // restore after a reload injects the token into every one of them.
-      await okta.tokenStore.updateProviderNames(provisioned.providerNames);
+      // Persist the complete provider rows + token-header templates so both
+      // the post-refresh reinjection and the config-free restore after a
+      // reload rebuild the memory-layer rows in full.
+      await okta.tokenStore.updateProviders(provisioned.providerRows, gateway.tokenHeaders);
       return { success: true };
     } catch (error) {
       ctx.logError("Okta login failed", error);
@@ -88,7 +89,7 @@ export const oktaHandlers: Record<string, Handler<any, any>> = {
       return {
         configured: true,
         loggedIn: (stored?.token.accessToken.length ?? 0) > 0,
-        providerNames: stored?.providerNames ?? [],
+        providerNames: Object.keys(stored?.providerRows ?? {}),
       };
     } catch {
       return { configured: false, loggedIn: false, providerNames: [] };
@@ -103,7 +104,7 @@ export const oktaHandlers: Record<string, Handler<any, any>> = {
       ctx.logError("Okta module unavailable", error);
       return { success: false, error: errorMessage(error) };
     }
-    const providerNames = (await okta.tokenStore.load())?.providerNames ?? [];
+    const providerNames = Object.keys((await okta.tokenStore.load())?.providerRows ?? {});
     try {
       await okta.tokenStore.clear();
       await okta.provider.removeSession();

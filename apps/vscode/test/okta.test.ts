@@ -48,7 +48,8 @@ import { clearOktaConfigCache, loadOktaConfig, oktaConfigPath } from "../src/okt
 import { startLoopbackServer } from "../src/okta/loopback";
 import { applyOktaProviderConfig, fetchOktaModels, type OktaModelEntry } from "../src/okta/models";
 import { OktaAuthenticationProvider } from "../src/okta/auth-provider";
-import { OktaTokenStore, createEngineInjector, needsRefresh, type OktaEngineInjector } from "../src/okta/token-store";
+import { OKTA_SECRET_KEY, OktaTokenStore, createEngineInjector, needsRefresh, type OktaEngineInjector } from "../src/okta/token-store";
+import { initOktaModule } from "../src/okta/runtime";
 
 let homeDir: string;
 
@@ -620,16 +621,55 @@ describe("deep-link callback flow", () => {
 });
 
 describe("login state and logout cleanup", () => {
-  it("CheckLoginStatus reports the OKTA session in okta mode (default, no file)", async () => {
-    const check = handlers[Methods.CheckLoginStatus] as (
+  it("OktaStatus reports the okta session in okta mode (default, no file)", async () => {
+    const status = handlers[Methods.OktaStatus] as (
       params: undefined,
-      ctx: { harness: { homeDir: string } },
-    ) => Promise<{ loggedIn: boolean }>;
-    expect(await check(undefined, { harness: { homeDir } })).toEqual({ loggedIn: false });
+      ctx: { harness: { homeDir: string }; logError: (message: string, error: unknown) => void },
+    ) => Promise<{ configured: boolean; loggedIn: boolean; providerNames: readonly string[] }>;
+    expect(await status(undefined, { harness: { homeDir }, logError: () => {} })).toEqual({
+      configured: false,
+      loggedIn: false,
+      providerNames: [],
+    });
   });
 
-  it("CheckLoginStatus falls back to the kimi harness when authMode is kimi", async () => {
-    writeFileSync(oktaConfigPath(homeDir), JSON.stringify({ issuer: "https://example.okta.com", clientId: "cid", authMode: "kimi" }));
+  it("OktaStatus reports a stored session once the module is armed", async () => {
+    writeFileSync(oktaConfigPath(homeDir), JSON.stringify({ issuer: "https://example.okta.com", clientId: "cid" }));
+    const secrets = new Map<string, string>([
+      [
+        OKTA_SECRET_KEY,
+        JSON.stringify({
+          token: { accessToken: "at", refreshToken: "rt", expiresAt: Math.floor(Date.now() / 1000) + 3000, scope: "openid", tokenType: "Bearer", expiresIn: 3600 },
+          accountLabel: "user@example.com",
+          providerRows: { "okta-openai": { type: "openai", baseUrl: "https://one.example.internal/v1" } },
+          tokenHeaders: {},
+        }),
+      ],
+    ]);
+    initOktaModule({
+      context: {
+        secrets: {
+          get: async (key: string) => secrets.get(key),
+          store: async (key: string, value: string) => void secrets.set(key, value),
+          delete: async (key: string) => void secrets.delete(key),
+        },
+      } as never,
+      harness: { homeDir } as never,
+      log: () => {},
+      logError: () => {},
+    });
+    const status = handlers[Methods.OktaStatus] as (
+      params: undefined,
+      ctx: { harness: { homeDir: string }; logError: (message: string, error: unknown) => void },
+    ) => Promise<{ configured: boolean; loggedIn: boolean; providerNames: readonly string[] }>;
+    expect(await status(undefined, { harness: { homeDir }, logError: () => {} })).toEqual({
+      configured: true,
+      loggedIn: true,
+      providerNames: ["okta-openai"],
+    });
+  });
+
+  it("CheckLoginStatus reports the kimi harness login state", async () => {
     const check = handlers[Methods.CheckLoginStatus] as unknown as (
       params: undefined,
       ctx: { harness: { homeDir: string; auth: { status: () => Promise<{ providers: { hasToken: boolean }[] }> } } },

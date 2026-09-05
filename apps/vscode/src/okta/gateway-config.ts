@@ -1,13 +1,11 @@
 /**
- * Gateway configuration, loaded from `<homeDir>/gateway.json` (default
- * `~/.kimi-code/gateway.json`). The gateway is YOUR OWN API — Okta only
- * issues the identity token. This file describes the MODEL CATALOG ONLY
- * (where to fetch the list): each catalog entry carries its own inference
- * endpoint (apiBase) and protocol, so no inference URL lives here. Kept
- * separate from okta.json on purpose: the IdP and the gateway are
- * administered by different people and change at different times.
+ * 网关配置,从 `<homeDir>/gateway.json`(默认 `~/.kimi-code/gateway.json`)加载。
+ * 网关是你自己的 API —— Okta 只负责签发身份令牌。这个文件只描述模型目录
+ * (从哪里拉取列表):目录里的每个条目自带推理端点(apiBase)和协议,所以这里
+ * 不出现任何推理 URL。与 okta.json 刻意分开:IdP(身份提供方,即 Okta)和网关
+ * 由不同的人管理,变更节奏也不同。
  *
- * Example file:
+ * 示例文件:
  * {
  *   "modelsBaseUrl": "https://api.example.internal",
  *   "modelsPath": "/models",
@@ -22,57 +20,65 @@ import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 export interface GatewayConfig {
-  /** Base URL of the model CATALOG (GET {modelsBaseUrl}{modelsPath}). */
+  /** 模型目录的 base URL(GET {modelsBaseUrl}{modelsPath})。 */
   readonly modelsBaseUrl: string;
+  /** 模型目录接口的路径,拼在 modelsBaseUrl 后。 */
   readonly modelsPath: string;
-  /** Prefix for the generated config.toml provider section names. */
+  /** 生成的 config.toml provider 段名前缀。 */
   readonly providerName: string;
-  /** Fallback window size when a catalog entry has no contextLength. */
+  /** 目录条目未声明 contextLength 时的兜底窗口大小。 */
   readonly defaultContextLength: number;
-  /** Static headers sent with every inference request, as-is. */
+  /** 随每个推理请求原样发送的静态 header。 */
   readonly headers: Readonly<Record<string, string>>;
   /**
-   * Token-derived headers: header name → VALUE TEMPLATE. `{token}` in the
-   * template is replaced with the current Okta access token at injection
-   * time ("{token}", "Bearer {token}", "agent-{token}" …). The rendered
-   * value lives only in the engine's memory layer, never on disk, and
-   * re-renders automatically on every token refresh.
+   * 由令牌派生的 header:header 名 → 值模板。注入时会把模板里的 `{token}`
+   * 替换为当前的 Okta 访问令牌("{token}"、"Bearer {token}"、"agent-{token}" 等)。
+   * 渲染结果只存在于引擎的内存配置层(引擎进程内存里的配置,重启即失),绝不
+   * 写进任何磁盘文件,且每次令牌刷新后自动重新渲染。
    */
   readonly tokenHeaders: Readonly<Record<string, string>>;
   /**
-   * Catalog label → actual inference protocol, for gateways whose "provider"
-   * labels name the vendor rather than the wire protocol (e.g. everything is
-   * labeled "openai" or "openrouter" but served over the Responses API).
-   * The ONLY mapping source — nothing is guessed in code. Values are
-   * validated against the supported protocols when the catalog is parsed.
+   * 目录标签 → 实际推理协议,用于 "provider" 标签写的是厂商名而非线上协议的
+   * 网关(例如全部标成 "openai" / "openrouter",实际走 Responses API)。
+   * 这是唯一的映射来源 —— 代码里不做任何猜测。解析目录时会校验值是否属于
+   * 支持的协议集合。
    */
   readonly protocolAliases: Readonly<Record<string, string>>;
 }
 
 export const GATEWAY_CONFIG_FILENAME = "gateway.json";
 
+// 各字段缺省值:gateway.json 未提供时使用。
 const DEFAULT_MODELS_PATH = "/models";
 export const DEFAULT_GATEWAY_PROVIDER_NAME = "okta";
 const DEFAULT_CONTEXT_LENGTH = 128000;
 const EMPTY_PROTOCOL_ALIASES: Readonly<Record<string, string>> = {};
 const EMPTY_HEADERS: Readonly<Record<string, string>> = {};
 
+/** 按 homeDir 维度的缓存条目,mtime + size 用于失效判断。 */
 interface GatewayCacheEntry {
   readonly mtimeMs: number;
   readonly size: number;
   readonly config: GatewayConfig | undefined;
 }
 
+/** homeDir → 缓存条目;文件未变化时避免重复读盘解析。 */
 const gatewayCache = new Map<string, GatewayCacheEntry>();
 
+/** 返回 gateway.json 的完整路径。 */
 export function gatewayConfigPath(homeDir: string): string {
   return join(homeDir, GATEWAY_CONFIG_FILENAME);
 }
 
+/** 清空配置缓存(测试用)。 */
 export function clearGatewayConfigCache(): void {
   gatewayCache.clear();
 }
 
+/**
+ * 加载 gateway.json:文件不存在返回 undefined,存在但非法则抛错。
+ * 以 (mtime, size) 做记忆化:文件的修改时间和大小都没变,就直接用上次的解析结果。
+ */
 export function loadGatewayConfig(homeDir: string): GatewayConfig | undefined {
   const path = gatewayConfigPath(homeDir);
   let mtimeMs = 0;
@@ -94,6 +100,7 @@ export function loadGatewayConfig(homeDir: string): GatewayConfig | undefined {
   return config;
 }
 
+/** 读取并解析 gateway.json,应用各字段缺省值;校验失败抛出带路径的错误。 */
 function parseGatewayConfig(path: string): GatewayConfig {
   let raw: unknown;
   try {
@@ -128,6 +135,7 @@ function parseGatewayConfig(path: string): GatewayConfig {
   };
 }
 
+/** 解析 protocolAliases(目录标签 → 协议映射);缺省返回空对象,值必须非空。 */
 function parseProtocolAliases(raw: Record<string, unknown>, path: string): Readonly<Record<string, string>> {
   const value = raw["protocolAliases"];
   if (value === undefined) return EMPTY_PROTOCOL_ALIASES;
@@ -144,6 +152,7 @@ function parseProtocolAliases(raw: Record<string, unknown>, path: string): Reado
   return aliases;
 }
 
+/** 解析静态 / 令牌 header 对象;tokenHeaders 的值必须包含 {token} 占位符。 */
 function parseHeaders(raw: Record<string, unknown>, field: string, path: string): Readonly<Record<string, string>> {
   const value = raw[field];
   if (value === undefined) return EMPTY_HEADERS;
@@ -165,6 +174,7 @@ function parseHeaders(raw: Record<string, unknown>, field: string, path: string)
   return out;
 }
 
+/** 校验字段为非空字符串,返回 trim 后的值。 */
 function requireNonEmptyString(record: Record<string, unknown>, field: string, path: string): string {
   const value = record[field];
   if (typeof value !== "string" || value.trim().length === 0) {
@@ -173,6 +183,7 @@ function requireNonEmptyString(record: Record<string, unknown>, field: string, p
   return value.trim();
 }
 
+/** 校验字段为 http(s) URL(本地开发网关允许 http);去掉结尾斜杠。 */
 function requireHttpUrl(record: Record<string, unknown>, field: string, path: string): string {
   const value = requireNonEmptyString(record, field, path);
   let parsed: URL;
@@ -189,6 +200,7 @@ function requireHttpUrl(record: Record<string, unknown>, field: string, path: st
   return value.endsWith("/") ? value.slice(0, -1) : value;
 }
 
+/** 类型收窄:判定通过后,TS 在该分支里把 unknown 当普通对象使用。 */
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }

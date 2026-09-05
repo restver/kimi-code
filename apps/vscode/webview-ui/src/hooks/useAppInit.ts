@@ -10,11 +10,11 @@ export type ConfigErrorStatus = "loading" | "no-workspace" | "runtime-error" | "
 export type AppViewResolution =
   | { readonly view: "login" }
   | {
-      readonly view: "status";
-      readonly status: ConfigErrorStatus;
-      /** True when the status screen must offer a path to the sign-in screen. */
-      readonly canGoToLogin: boolean;
-    }
+    readonly view: "status";
+    readonly status: ConfigErrorStatus;
+    /** True when the status screen must offer a path to the sign-in screen. */
+    readonly canGoToLogin: boolean;
+  }
   | { readonly view: "main" };
 
 /**
@@ -101,19 +101,23 @@ export function useAppInit(): AppInitState {
         setMCPServers(mcpServers);
         setWireSlashCommands(slashCommands);
 
-        const [loginStatus, kimiConfig] = await Promise.all([bridge.checkLoginStatus(), bridge.getModels()]);
+        const [loginStatus, oktaStatus, kimiConfig] = await Promise.all([
+          bridge.checkLoginStatus(),
+          bridge.oktaStatus(),
+          bridge.getModels(),
+        ]);
         if (cancelled) {
           return;
         }
 
-        console.log("[AppInit] Login status:", loginStatus, "kimiConfig:", kimiConfig);
-
-        setIsLoggedIn(loginStatus.loggedIn);
+        console.log("[AppInit] Login status:", loginStatus, "oktaStatus:", oktaStatus, "kimiConfig:", kimiConfig);
+        const loggedIn = oktaStatus.configured ? oktaStatus.loggedIn : loginStatus.loggedIn;
+        setIsLoggedIn(loggedIn);
         initModels(kimiConfig.models, kimiConfig.defaultModel, kimiConfig.defaultThinking, kimiConfig.defaultThinkingEffort);
 
         const modelsCount = kimiConfig.models?.length ?? 0;
 
-        if (modelsCount === 0 && !loginStatus.loggedIn) {
+        if (modelsCount === 0 && !loggedIn) {
           setState({ status: "not-logged-in", errorMessage: null, modelsCount });
           return;
         }
@@ -123,7 +127,7 @@ export function useAppInit(): AppInitState {
           return;
         }
 
-        if (requiresManagedProviderLogin(kimiConfig.models, kimiConfig.defaultModel, loginStatus.loggedIn)) {
+        if (requiresManagedProviderLogin(kimiConfig.models, kimiConfig.defaultModel, loggedIn)) {
           setState({ status: "not-logged-in", errorMessage: null, modelsCount });
           return;
         }

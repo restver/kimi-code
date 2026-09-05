@@ -6,9 +6,9 @@
  * AuthenticationProvider 注册进环境(registerAuthenticationProvider /
  * registerUriHandler),组装根必须拿到这个集成句柄。
  *
- * 本文件不 import vscode:宿主能力以端口进入 —— requestSession(组装根传入,
- * 包装 vscode.authentication.getSession;对应 KimiAuthFacade 构造函数注入
- * configAdapter 函数束的方式)与 secrets 的结构化最小接口(vscode.SecretStorage
+ * 本文件不 import vscode:宿主能力以两种方式进入 —— provider 的
+ * requestSession 方法(VS Code 认证通道的封装,住在 auth-provider —— vscode
+ * 认证 API 的唯一居所)与 secrets 的结构化最小接口(vscode.SecretStorage
  * 结构上满足)。UI 回调(onLoginUrl)随每次 login 传入,与 Kimi 登录的
  * onDeviceCode 同一模式;持久回调(onSessionChanged)在构造时注入,对应
  * KimiAuthFacadeOptions.onRefresh。任一用例失败直接抛错,由调用方翻译。
@@ -21,17 +21,10 @@ import { loadOktaConfig, oktaScopes, type OktaSsoConfig } from "./okta-config";
 import { provisionOktaModels } from "./models";
 import { OktaTokenStore, createEngineInjector, type OktaSecretStorage } from "./token-store";
 
-/** 会话句柄的最小接口;VS Code 的 AuthenticationSession 结构上满足。 */
-export interface OktaSessionHandle {
-  readonly accessToken: string;
-}
-
 export interface OktaAuthFacadeOptions {
   readonly harness: KimiHarness;
   /** 密钥存储(tokenStore 用它持久化会话);vscode.SecretStorage 结构上满足。 */
   readonly secrets: OktaSecretStorage;
-  /** 请求登录会话的端口:组装根用它包装 vscode.authentication.getSession。 */
-  readonly requestSession: (scopes: readonly string[]) => Promise<OktaSessionHandle | undefined>;
   readonly log: (message: string) => void;
   readonly logError: (message: string, error: unknown) => void;
   /** 会话被清空(登出)时触发;组装根用它向所有 webview 广播。 */
@@ -51,14 +44,12 @@ export interface OktaAuthStatus {
 export class OktaAuthFacade {
   private readonly harness: KimiHarness;
   private readonly tokenStore: OktaTokenStore;
-  private readonly requestSession: OktaAuthFacadeOptions["requestSession"];
 
   /** VS Code 集成句柄:仅供组装根注册进环境,用例一律走 login/logout/status。 */
   readonly provider: OktaAuthenticationProvider;
 
   constructor(options: OktaAuthFacadeOptions) {
     this.harness = options.harness;
-    this.requestSession = options.requestSession;
     this.tokenStore = new OktaTokenStore({ secrets: options.secrets, logError: options.logError });
     this.provider = new OktaAuthenticationProvider({
       harness: options.harness,
@@ -83,7 +74,8 @@ export class OktaAuthFacade {
     const config = this.requireOktaConfig();
     const gateway = this.requireGatewayConfig();
     this.provider.onLoginUrl = options.onLoginUrl;
-    const session = await this.requestSession(oktaScopes(config));
+    const scopes = oktaScopes(config);
+    const session = await this.provider.requestSession(scopes);
     if (session === undefined) {
       throw new Error("Okta sign-in was not completed.");
     }

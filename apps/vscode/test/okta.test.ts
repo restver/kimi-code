@@ -16,6 +16,11 @@ import type { AddressInfo } from "node:net";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+const { uriHandlers } = vi.hoisted(() => ({
+  // Registered URI handlers, captured so tests can drive the real register() wiring.
+  uriHandlers: [] as Array<{ handleUri: (uri: unknown) => void }>,
+}));
+
 vi.mock("vscode", () => ({
   env: {
     openExternal: vi.fn(async () => true),
@@ -34,7 +39,12 @@ vi.mock("vscode", () => ({
   Disposable: class {
     dispose = vi.fn();
   },
-  window: { registerUriHandler: vi.fn(() => ({ dispose: () => {} })) },
+  window: {
+    registerUriHandler: vi.fn((handler: { handleUri: (uri: unknown) => void }) => {
+      uriHandlers.push(handler);
+      return { dispose: () => {} };
+    }),
+  },
   commands: { executeCommand: vi.fn(async () => undefined) },
 }));
 
@@ -608,15 +618,19 @@ describe("deep-link callback flow", () => {
       log: () => {},
       logError: () => {},
     });
+    // Register first so the deep-link callback flows through the real wiring.
+    provider.register();
+    const uriHandler = uriHandlers.at(-1);
+    if (uriHandler === undefined) throw new Error("URI handler was not registered");
     provider.onLoginUrl = (url) => {
       const authorize = new URL(url);
       expect(authorize.searchParams.get("redirect_uri")).toBe("vscode://life-restver-rd.restver-code/callback");
-      void provider.handleUri({ query: "code=abc&state=" + (authorize.searchParams.get("state") ?? "") } as never);
+      void uriHandler.handleUri({ query: "code=abc&state=" + (authorize.searchParams.get("state") ?? "") });
     };
     const session = await provider.createSession(["openid"]);
     expect(session.accessToken).toBe("at");
     expect((await store.load())?.token.refreshToken).toBe("rt");
-    provider.handleUri({ query: "code=late&state=whatever" } as never);
+    uriHandler.handleUri({ query: "code=late&state=whatever" });
   });
 });
 

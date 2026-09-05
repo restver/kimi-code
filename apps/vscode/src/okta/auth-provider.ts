@@ -71,10 +71,37 @@ export class OktaAuthenticationProvider implements vscode.AuthenticationProvider
     this.logError = options.logError;
   }
 
+  /**
+   * 把本提供器注册进 VS Code 环境(认证提供器 + vscode:// 深链接回调),返回需要
+   * 由调用方保管的注册句柄。仅供组装根在组装时调用:何时注册、何时注销是组装
+   * 策略,归组装根;"怎么注册"(ID、标签、uri 路由)是本类的私有知识。
+   */
+  register(): readonly vscode.Disposable[] {
+    const registration = vscode.authentication.registerAuthenticationProvider(OKTA_PROVIDER_ID, OKTA_PROVIDER_LABEL, this, {
+      supportsMultipleAccounts: false,
+    });
+    // 当 okta.json 配置了 redirectUri 时,接收 vscode:// 深链接回调(浏览器打开
+    // vscode:// 开头的 URL 后,系统转交 VS Code,VS Code 再路由给本扩展)。
+    const uriHandler = vscode.window.registerUriHandler({ handleUri: (uri) => this.handleUri(uri) });
+    return [registration, uriHandler];
+  }
+
+  /**
+   * 请求登录会话的公开入口:走 VS Code 官方认证通道(getSession)。VS Code 先查
+   * 自己的会话缓存(命中则静默返回,不开浏览器);未命中且 createIfNone 时先弹
+   * "允许扩展登录"门禁,再回调本类的 createSession。所有登录入口(facade 的
+   * login、账户头像、其他扩展)经此汇聚,由 VS Code 统一做单飞合并。
+   */
+  async requestSession(scopes: readonly string[]): Promise<vscode.AuthenticationSession | undefined> {
+    return vscode.authentication.getSession(OKTA_PROVIDER_ID, scopes, { createIfNone: true });
+  }
+
   /** 实现 vscode.AuthenticationProvider:返回已存储的会话(无令牌则视为未登录)。 */
   async getSessions(
     _scopes?: readonly string[],
   ): Promise<vscode.AuthenticationSession[]> {
+    // // TODO(okta-debug): 临时日志,观察 VS Code 的调用方,看完即删。
+    // this.log(`[okta-debug] getSessions called\n${new Error().stack ?? ""}`);
     const stored = await this.tokenStore.load();
     if (stored === undefined || stored.token.accessToken.length === 0) return [];
     return [this.toSession(stored)];
@@ -115,29 +142,6 @@ export class OktaAuthenticationProvider implements vscode.AuthenticationProvider
   }
 
   /**
-   * vscode:// 深链接回调(redirectUri 模式):Okta 把浏览器重定向到注册的
-   * vscode:// URI,VS Code 把它路由到这里。state 不匹配(过期链接、另一个
-   * 窗口)时直接忽略。
-   */
-  handleUri(uri: vscode.Uri): void {
-    const pending = this.pendingCallback;
-    if (pending === undefined) return;
-    const params = new URLSearchParams(uri.query);
-    const error = params.get("error");
-    if (error !== null) {
-      pending.resolve({ error: `Okta authorization failed: ${error}` });
-      this.pendingCallback = undefined;
-      return;
-    }
-    const code = params.get("code");
-    const state = params.get("state");
-    if (code !== null && state === pending.state) {
-      pending.resolve({ code });
-      this.pendingCallback = undefined;
-    }
-  }
-
-  /**
    * 窗口重载后恢复上一次的登录 —— 不需要 okta.json:存储的会话自带恢复所需的
    * 一切(令牌 + provider 名)。把仍然有效的访问令牌重新注入引擎的内存配置
    * (新引擎进程里是空的);令牌剩余寿命不足一半则改为刷新(那条路径才需要
@@ -170,8 +174,36 @@ export class OktaAuthenticationProvider implements vscode.AuthenticationProvider
     }
   }
 
+  /** 释放事件发射器。 */
+  dispose(): void {
+    this._onDidChangeSessions.dispose();
+  }
+
+  /**
+   * vscode:// 深链接回调(redirectUri 模式),由 register() 注册的 UriHandler 接线:
+   * Okta 把浏览器重定向到注册的 vscode:// URI,VS Code 把它路由到这里。
+   * state 不匹配(过期链接、另一个窗口)时直接忽略。
+   */
+  private handleUri(uri: vscode.Uri): void {
+    const pending = this.pendingCallback;
+    if (pending === undefined) return;
+    const params = new URLSearchParams(uri.query);
+    const error = params.get("error");
+    if (error !== null) {
+      pending.resolve({ error: `Okta authorization failed: ${error}` });
+      this.pendingCallback = undefined;
+      return;
+    }
+    const code = params.get("code");
+    const state = params.get("state");
+    if (code !== null && state === pending.state) {
+      pending.resolve({ code });
+      this.pendingCallback = undefined;
+    }
+  }
+
   /** 启动定时刷新;过期登出只记日志,由登录页接管。 */
-  startRefreshTimer(): void {
+  private startRefreshTimer(): void {
     this.tokenStore.startRefreshTimer(async () => {
       try {
         return await this.refresh();
@@ -190,7 +222,7 @@ export class OktaAuthenticationProvider implements vscode.AuthenticationProvider
    * 用 refresh_token 授权刷新已存储的令牌。返回刷新后的会话(已持久化)。
    * 刷新令牌被拒绝时,先清空存储再抛出 `OktaRefreshExpiredError`。
    */
-  async refresh(): Promise<StoredOktaSession> {
+  private async refresh(): Promise<StoredOktaSession> {
     const config = this.requireConfig();
     const stored = await this.tokenStore.load();
     if (stored === undefined || stored.token.refreshToken.length === 0) {
@@ -220,11 +252,6 @@ export class OktaAuthenticationProvider implements vscode.AuthenticationProvider
     await this.tokenStore.save(refreshed);
     this._onDidChangeSessions.fire({ added: [], removed: [], changed: [] });
     return refreshed;
-  }
-
-  /** 释放事件发射器。 */
-  dispose(): void {
-    this._onDidChangeSessions.dispose();
   }
 
   /** 惰性配置:只有在流程真正需要时才读 okta.json,缺失时抛错。 */
@@ -285,8 +312,7 @@ export class OktaAuthenticationProvider implements vscode.AuthenticationProvider
         // 本地桌面不映射也能工作;远程只是丢掉端口转发(远程开发时把本机端口
         // 映射出去的机制)、大概率失败 —— 记日志继续。
         this.log(
-          `Okta callback URI mapping unavailable, using ${redirectUri}: ${
-            error instanceof Error ? error.message : String(error)
+          `Okta callback URI mapping unavailable, using ${redirectUri}: ${error instanceof Error ? error.message : String(error)
           }`,
         );
       }

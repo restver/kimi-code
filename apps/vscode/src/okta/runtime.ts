@@ -20,7 +20,6 @@ import type { KimiHarness } from "@moonshot-ai/kimi-code-sdk";
 
 import { Events } from "../../shared/bridge";
 
-import { OKTA_PROVIDER_ID, OKTA_PROVIDER_LABEL } from "./auth-provider";
 import { OktaAuthFacade } from "./auth-facade";
 
 /** Okta 模块运行时:组装根产出的句柄 —— 消费面只有用例门面,对齐 `harness.auth`。 */
@@ -90,23 +89,15 @@ export function ensureOktaRuntime(harness: KimiHarness): OktaRuntime {
   const auth = new OktaAuthFacade({
     harness,
     secrets: host.secrets,
-    // 会话获取端口:走 VS Code 官方认证入口(会话进账户头像、VS Code 级单飞合并)。
-    requestSession: async (scopes) => {
-      return vscode.authentication.getSession(OKTA_PROVIDER_ID, scopes, { createIfNone: true });
-    },
     log: host.log,
     logError: host.logError,
     // 由 webview 之外触发的登出(如 VS Code 账户头像菜单)同样需要
     // 通知 webview 重新初始化、回到登录界面。
     onSessionChanged: () => host.broadcast?.(Events.OktaSessionChanged, undefined),
   });
-  const registration = vscode.authentication.registerAuthenticationProvider(OKTA_PROVIDER_ID, OKTA_PROVIDER_LABEL, auth.provider, {
-    supportsMultipleAccounts: false,
-  });
-  // 当 okta.json 配置了 redirectUri 时,接收 vscode:// 深链接回调(浏览器打开
-  // vscode:// 开头的 URL 后,系统转交 VS Code,VS Code 再路由给本扩展)。
-  const uriHandler = vscode.window.registerUriHandler({ handleUri: (uri) => auth.provider.handleUri(uri) });
-  runtime = { auth, harness, disposables: [registration, uriHandler] };
+  // 注册进 VS Code 环境("怎么注册"是 provider 的私有知识),注册句柄由组装根保管与注销。
+  const disposables = auth.provider.register();
+  runtime = { auth, harness, disposables };
   // 异步恢复上一次的会话(不阻塞运行时的构建)。
   void auth.provider.restoreOnActivation();
   return runtime;

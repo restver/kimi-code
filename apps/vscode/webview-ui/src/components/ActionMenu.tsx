@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { useSettingsStore } from "@/stores";
 import { bridge } from "@/services";
+import { useAuthMode } from "@/hooks/useAuthMode";
 import { toast } from "@/components/ui/sonner";
 import { cn } from "@/lib/utils";
 
@@ -45,6 +46,7 @@ export function ActionMenu({ className, onAuthAction }: ActionMenuProps) {
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const { setMCPModalOpen, isLoggedIn, setIsLoggedIn, extensionConfig } = useSettingsStore();
+  const authMode = useAuthMode(); // ✅ 在组件体顶层调用
 
   const handleOpenSettings = () => {
     void bridge.openSettings();
@@ -74,11 +76,14 @@ export function ActionMenu({ className, onAuthAction }: ActionMenuProps) {
   const handleAuthAction = async () => {
     setLoading(true);
     try {
+      // Okta is the default login mode; route to its endpoints so the
+      // button reflects and drives the OKTA session, not the Kimi one.
+      const okta = authMode.mode === "okta";
       if (isLoggedIn) {
-        await bridge.logout();
+        await (okta ? bridge.oktaLogout() : bridge.logout());
         setIsLoggedIn(false);
       } else {
-        const result = await bridge.login();
+        const result = await (okta ? bridge.oktaLogin() : bridge.login());
         if (result.success) {
           setIsLoggedIn(true);
         } else {

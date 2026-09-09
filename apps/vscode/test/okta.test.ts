@@ -624,7 +624,7 @@ describe("deep-link callback flow", () => {
     if (uriHandler === undefined) throw new Error("URI handler was not registered");
     provider.onLoginUrl = (url) => {
       const authorize = new URL(url);
-      expect(authorize.searchParams.get("redirect_uri")).toBe("vscode://moonshot-ai.kimi-code/callback");
+      expect(authorize.searchParams.get("redirect_uri")).toBe("vscode://life-restver-rd.restver-code/callback");
       void uriHandler.handleUri({ query: "code=abc&state=" + (authorize.searchParams.get("state") ?? "") });
     };
     const session = await provider.createSession(["openid"]);

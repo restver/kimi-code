@@ -977,6 +977,76 @@ c. 合并模型清单(:604-628):
 
 → 登录 + 配置模型到此完成,控制权回到 2.3。进入第 5 步看以后怎么用。
 
+**到这里,登录流程完毕,可以开始会话了**:token 在凭据文件里、模型清单和默认模型在 config.toml 里,"用哪个模型、往哪个地址发、凭据去哪找"全部就绪。剩下的是各入口自己的收尾:
+
+- VS Code:handler 在 login 成功后调 updateLoginContext(auth.handler.ts:25)→ 返回 success 给 webview → handleLoginSuccess → refresh()(App.tsx:86-90)→ useAppInit 重跑:loggedIn=true、模型数 > 0 → status "ready" → 进主界面。第 5 步是惰性的:发出第一条消息才第一次真正执行,每次请求现取 token、快过期现刷。
+
+- TUI:refreshKimiRegion() + spinner 停在 "Logged in."(tui/commands/auth.ts:77-78),回到对话界面。
+
+- CLI:打印登录结果(默认模型等),之后起会话时用。
+
+**updateLoginContext 是什么**(apps/vscode/src/utils/context.ts:4-9)—— VS Code 入口收尾都要调它,一共 6 处:扩展激活(extension.ts:36)、CheckLoginStatus(auth.handler.ts:13)、登录成功(:25)、登录失败(:29)、登出成功(:43)、登出失败(:47)。代码就四行:
+
+```ts
+export async function updateLoginContext(harness: KimiHarness): Promise<boolean> {
+  const status = await harness.auth.status();
+  const loggedIn = status.providers.some((provider) => provider.hasToken);
+  await vscode.commands.executeCommand("setContext", "kimi.isLoggedIn", loggedIn);
+  return loggedIn;
+}
+```
+
+逐行:
+
+- `harness.auth.status()`:问总台"现在有哪些提供方、各自有没有 token" —— 只读凭据文件,不发网络(KimiAuthFacade.status,auth.ts:132-134);
+
+- `providers.some(hasToken)`:任何一个提供方有 token 就算已登录;
+
+- `setContext "kimi.isLoggedIn"`:设置一个 VS Code 上下文键(界面元素按登录状态显隐的开关)—— 设置之后的流程见下;
+
+- 返回 loggedIn,调用方(CheckLoginStatus)把它作为结果带给 webview。
+
+**setContext 设置之后发生什么**:
+
+- VS Code 重新计算所有引用这个键的 `when` 条件 —— 宿主内置机制,不需要我们写任何代码;
+
+- package.json 的 commandPalette 段(:200 起)里,`kimi.logout` 那条带着 `"when": "kimi.isLoggedIn"`(:233-236)—— 已登录时,Ctrl+Shift+P 命令面板里才出现 Kimi 的 Logout 命令;登出后键变 false,这条命令从面板里消失;
+
+```json
+        {
+          "command": "kimi.logout",
+          "when": "kimi.isLoggedIn"
+        }
+```
+
+- 真去点这个命令的话,执行的只是个指路牌(extension.ts:123-126):聚焦 webview + 提示去设置里点登出 —— 真正的登出走 webview 设置里的按钮 → `Methods.Logout` RPC → `harness.auth.logout`:
+
+```ts
+    "kimi.logout": async () => {
+      await vscode.commands.executeCommand("kimi.webview.focus");
+      await vscode.window.showInformationMessage("Use the logout button in Kimi settings.");
+    },
+```
+
+`kimi.webview.focus` 呢?它不是本仓库定义的命令,是 VS Code 的内置约定:每个注册了的 webview 视图,VS Code 自动生成一个 `<视图id>.focus` 命令。这个视图的 id 是 `kimi.webview` —— package.json:178-184 声明它住在 `kimi-sidebar` 容器里、名字叫 "Kimi Code";extension.ts:69 注册它的内容提供器:
+
+```ts
+    vscode.window.registerWebviewViewProvider("kimi.webview", provider, {
+```
+
+所以 `executeCommand("kimi.webview.focus")` 的效果是:把侧边栏切到 Kimi Code 面板并聚焦。登出指路牌里先调它,是为了把面板调到用户眼前、再弹提示"去设置里点登出" —— 不然用户可能找不到设置按钮在哪。全仓用它 4 处(extension.ts:101、:104、:113、:124),都是命令处理里"需要用户先看到 webview"的场景。
+
+```
+setContext kimi.isLoggedIn
+  → when 条件重算(宿主内置)
+  → 命令面板的 kimi.logout 项显隐(package.json:233-236)
+      → 点它 = 指路牌:executeCommand("kimi.webview.focus") + 提示
+          → kimi.webview.focus 又是什么:VS Code 对注册视图自动生成的
+            <id>.focus 内置命令(id = kimi.webview,package.json:178-184
+            声明、extension.ts:69 注册),效果 = 侧边栏切到 Kimi Code 面板并聚焦
+      → 真正登出:webview 设置按钮 → Methods.Logout RPC → harness.auth.logout
+```
+
 ### 第 5 步:以后每次请求,token从哪来(闭环)
 
 5.1 你每次发消息,引擎要调模型前,都会通过 SDK 组装时递进来的 resolveOAuthTokenProvider 拿一个"取 token 的函数"(node-sdk/src/auth.ts:273-292):

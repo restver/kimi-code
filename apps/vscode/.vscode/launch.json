@@ -13,7 +13,7 @@
         "--disable-workspace-trust",
         "--skip-welcome",
         "--skip-release-notes",
-        "${workspaceFolder}/../../.tmp/vscode-extension-dev/workspace",
+        "${workspaceFolder}/../../../kimi-code", // ← 新的窗口打开的项目
         "--disable-extensions" // ← 这就是关键禁用已安装的插件
       ],
       "env": {
